@@ -20,6 +20,13 @@ def read_image(f):
     ds = gdal.Open(f, gdal.GA_ReadOnly)
     return ds.GetRasterBand(1).ReadAsArray()
 
+
+# State/condition enumeration
+CONDITION_OPEN_WATER = 1
+CONDITION_DIST_VEG = 2
+CONDITION_UNDIST_VEG = 3
+
+
 # SPECIFY disturbance parameters
 T_TCB_diff = -500   # change in annual mean TCB
 T_TCB_sum = -500	# cumulative difference in annual mean TCB
@@ -184,11 +191,11 @@ for py in list(range(0, py_dim)): # row iterator
             for index, year in enumerate(years_fmask):
                 if index < length:
                     if (TCG_amp[index] < T_TCG_open): 
-                        veg_cond[py, px, index] = 1
+                        veg_cond[py, px, index] = CONDITION_OPEN_WATER
                     elif (TCG_amp_adj[index] < T_TCG_veg):   
-                        veg_cond[py, px, index] = 2
+                        veg_cond[py, px, index] = CONDITION_DIST_VEG
                     else:
-                        veg_cond[py, px, index] = 3
+                        veg_cond[py, px, index] = CONDITION_UNDIST_VEG
                 else:
                     continue          
 print('Analysis of disturbance complete!')
