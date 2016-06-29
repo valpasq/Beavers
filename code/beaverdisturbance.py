@@ -52,6 +52,10 @@ config_file = '/projectnb/landsat/projects/Massachusetts/Wachusett_medium/Wachus
 
 # Read in and parse config file
 cfg = yaml.load(open(config_file))
+# List to np.ndarray so it works with cyprep.get_valid_mask
+cfg['dataset']['min_values'] = np.asarray(cfg['dataset']['min_values'])
+cfg['dataset']['max_values'] = np.asarray(cfg['dataset']['max_values'])
+
 # Get files list
 df = csvfile_to_dataframe(cfg['dataset']['input_file'], \
                           date_format=cfg['dataset']['date_format'])
