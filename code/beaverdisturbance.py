@@ -72,13 +72,16 @@ df['x'] = df['date']
 dates = df['date'].values
 
 # Loop over rows and columns, read and mask time series, find disturbance events
-for py in list(range(0, py_dim)): # row iterator
-    print('working on row {py}'.format(py=py))
-    
-    for px in list(range(0, px_dim)): # column iterator
-        
-        # Read in time series as numpy array
-        Y = read_pixel_timeseries(df['filename'], px, py)
+for py in range(0, py_dim): # row iterator
+    print('Reading in row {py}'.format(py=py))
+    Y_row = read_line(py, df['filename'], df['image_ID'], cfg['dataset'],
+                      px_dim, n_band + 1, dtype,  # +1 for now for Fmask
+                      read_cache=True, write_cache=True,
+                      validate_cache=False)
+    print('Read in the data...')
+
+    for px in range(0, px_dim): # column iterator
+        Y = Y_row.take(px, axis=2)
         
         if np.all(Y[0] == -9999): # skip if TS is all nodata
             pass
