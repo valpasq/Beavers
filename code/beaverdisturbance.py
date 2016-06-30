@@ -1,23 +1,31 @@
 """ Script for finding beaver disturbances in wetlands
 """
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 import datetime as dt
+
+import matplotlib.pyplot as plt
+import numpy as np
 from osgeo import gdal, gdal_array
+import pandas as pd
+import yaml
 
 # import YATSM functions
 import yatsm
-from yatsm.io import read_pixel_timeseries
+from yatsm.io import read_line
 from yatsm.utils import csvfile_to_dataframe, get_image_IDs
-from yatsm.config_parser import convert_config, parse_config_file
-from yatsm.config_parser import convert_config, parse_config_file
+# from yatsm.config_parser import convert_config, parse_config_file
 import yatsm._cyprep as cyprep
 
 # Define image reading function
 def read_image(f):
     ds = gdal.Open(f, gdal.GA_ReadOnly)
     return ds.GetRasterBand(1).ReadAsArray()
+
+
+# State/condition enumeration
+CONDITION_OPEN_WATER = 1
+CONDITION_DIST_VEG = 2
+CONDITION_UNDIST_VEG = 3
+
 
 # SPECIFY disturbance parameters
 T_TCB_diff = -500   # change in annual mean TCB
@@ -34,11 +42,20 @@ px_dim = example_img.shape[1]
 print('Shape of example image:')
 print(example_img.shape)
 
+# Up front -- declare hard coded dataset attributes (for now)
+BAND_NAMES = ['blue', 'green', 'red', 'nir', 'swir1', 'swir2', 'therm', 'tcb', 'tcg', 'tcw']
+n_band = len(BAND_NAMES)
+dtype = np.int16
+
 ## SPECIFY YATSM CONFIG FILE
 config_file = '/projectnb/landsat/projects/Massachusetts/Wachusett_medium/Wachusett_config_pixel.yaml'
 
 # Read in and parse config file
-cfg = parse_config_file(config_file)
+cfg = yaml.load(open(config_file))
+# List to np.ndarray so it works with cyprep.get_valid_mask
+cfg['dataset']['min_values'] = np.asarray(cfg['dataset']['min_values'])
+cfg['dataset']['max_values'] = np.asarray(cfg['dataset']['max_values'])
+
 # Get files list
 df = csvfile_to_dataframe(cfg['dataset']['input_file'], \
                           date_format=cfg['dataset']['date_format'])
@@ -55,13 +72,16 @@ df['x'] = df['date']
 dates = df['date'].values
 
 # Loop over rows and columns, read and mask time series, find disturbance events
-for py in list(range(0, py_dim)): # row iterator
-    print('working on row {py}'.format(py=py))
-    
-    for px in list(range(0, px_dim)): # column iterator
-        
-        # Read in time series as numpy array
-        Y = read_pixel_timeseries(df['filename'], px, py)
+for py in range(0, py_dim): # row iterator
+    print('Reading in row {py}'.format(py=py))
+    Y_row = read_line(py, df['filename'], df['image_ID'], cfg['dataset'],
+                      px_dim, n_band + 1, dtype,  # +1 for now for Fmask
+                      read_cache=True, write_cache=True,
+                      validate_cache=False)
+    print('Read in the data...')
+
+    for px in range(0, px_dim): # column iterator
+        Y = Y_row.take(px, axis=2)
         
         if np.all(Y[0] == -9999): # skip if TS is all nodata
             pass
@@ -117,11 +137,10 @@ for py in list(range(0, py_dim)): # row iterator
             Y_fmask_csv = np.transpose(Y_fmask)
             data_fmask = np.concatenate([dt_dates_fmask_csv, Y_fmask_csv], axis=1)
             col_names = ['date', 'blue', 'green', 'red', 'nir', 'swir1', 'swir2', 'therm', 'tcb', 'tcg', 'tcw']
-            band_names = ['blue', 'green', 'red', 'nir', 'swir1', 'swir2', 'therm', 'tcb', 'tcg', 'tcw']
             # Step 2. create dataframe
             data_fmask_df = pd.DataFrame(data_fmask, columns=col_names)
             # convert reflectance to int
-            data_fmask_df[band_names] = data_fmask_df[band_names].astype(int) 
+            data_fmask_df[BAND_NAMES] = data_fmask_df[BAND_NAMES].astype(int)
             # Step 3. group by year to generate annual TS
             year_group_fmask = data_fmask_df.groupby(data_fmask_df.date.dt.year)
             # get years in time series 
@@ -138,7 +157,7 @@ for py in list(range(0, py_dim)): # row iterator
             # Step 2. create dataframe
             data_multi_df = pd.DataFrame(data_multi, columns=col_names)
             # convert reflectance to int
-            data_multi_df[band_names] = data_multi_df[band_names].astype(int) # convert reflectance to int
+            data_multi_df[BAND_NAMES] = data_multi_df[BAND_NAMES].astype(int) # convert reflectance to int
             # Step 3. group by year to generate annual TS
             year_group_multi = data_multi_df.groupby(data_multi_df.date.dt.year) # annual time series
             # get years in time series 
@@ -179,11 +198,11 @@ for py in list(range(0, py_dim)): # row iterator
             for index, year in enumerate(years_fmask):
                 if index < length:
                     if (TCG_amp[index] < T_TCG_open): 
-                        veg_cond[py, px, index] = 1
+                        veg_cond[py, px, index] = CONDITION_OPEN_WATER
                     elif (TCG_amp_adj[index] < T_TCG_veg):   
-                        veg_cond[py, px, index] = 2
+                        veg_cond[py, px, index] = CONDITION_DIST_VEG
                     else:
-                        veg_cond[py, px, index] = 3
+                        veg_cond[py, px, index] = CONDITION_UNDIST_VEG
                 else:
                     continue          
 print('Analysis of disturbance complete!')
