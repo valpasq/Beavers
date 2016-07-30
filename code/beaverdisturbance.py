@@ -26,6 +26,7 @@ CONDITION_OPEN_WATER = 1
 CONDITION_DIST_VEG = 2
 CONDITION_UNDIST_VEG = 3
 
+NDV = -9999
 
 # SPECIFY disturbance parameters
 T_TCB_diff = -500   # change in annual mean TCB
@@ -35,7 +36,7 @@ T_TCG_veg = 0.70    # % reduction in TCG amplitude (relative to TS start)
 T_TCG_open = 750	# TCG amplitude threshold for open water conditions
 
 # Read in example image for dimensions, map creation
-example_img_fn = '/projectnb/landsat/projects/Massachusetts/Wachusett_medium/images/example_img'
+example_img_fn = '/projectnb/landsat/projects/Massachusetts/Broadmoor_medium/images/example_img'
 example_img = read_image(example_img_fn)
 py_dim = example_img.shape[0]
 px_dim = example_img.shape[1]
@@ -48,7 +49,7 @@ n_band = len(BAND_NAMES)
 dtype = np.int16
 
 ## SPECIFY YATSM CONFIG FILE
-config_file = '/projectnb/landsat/projects/Massachusetts/Wachusett_medium/Wachusett_config_pixel.yaml'
+config_file = '/projectnb/landsat/projects/Massachusetts/Broadmoor_medium/Broadmoor_config_pixel.yaml'
 
 # Read in and parse config file
 cfg = yaml.load(open(config_file))
@@ -73,18 +74,19 @@ dates = df['date'].values
 
 # Loop over rows and columns, read and mask time series, find disturbance events
 for py in range(0, py_dim): # row iterator
-    print('Reading in row {py}'.format(py=py))
+    print('Working on row {py}'.format(py=py))
     Y_row = read_line(py, df['filename'], df['image_ID'], cfg['dataset'],
                       px_dim, n_band + 1, dtype,  # +1 for now for Fmask
-                      read_cache=True, write_cache=True,
+                      read_cache=True, write_cache=False,
                       validate_cache=False)
-    print('Read in the data...')
+    #print('Read in the data...')
 
     for px in range(0, px_dim): # column iterator
         Y = Y_row.take(px, axis=2)
+        #import pdb; pdb.set_trace()
         
-        if np.all(Y[0] == -9999): # skip if TS is all nodata
-            pass
+        if (Y[0:6] == NDV).mean() > 0.3:
+            continue
         else: # process time series for disturbance events
             
             # Mask based on physical constraints and Fmask 
@@ -167,6 +169,7 @@ for py in range(0, py_dim): # row iterator
             # TC Brightness Change Detection - Flood
             # Calculate mean annual TCB
             TCB_mean = year_group_fmask['tcb'].mean()
+            #import pdb; pdb.set_trace()
             # Calculate year-to-year difference in mean TCB
             TCB_mean_diff = np.diff(TCB_mean)
             # Cumulative sum of annual difference in TCB
@@ -187,21 +190,23 @@ for py in range(0, py_dim): # row iterator
             length = (years_fmask.size - 1)
             for index, year in enumerate(years_fmask): 
                 if index < length:
-                    if (((TCB_mean_diff[index] < T_TCB_diff) and (TCG_amp_adj[index+1] < T_TCG_veg)) or \
-                         ((TCB_mean_sum[index] < T_TCB_sum) and (TCG_amp_adj[index+1] < T_TCG_veg))):
-                        disturbances[py, px, index] = year
+                    if ((((TCB_mean_diff[index] < T_TCB_diff) and (TCG_amp_adj[index+1] < T_TCG_veg)) or \
+                    ((TCB_mean_sum[index] < T_TCB_sum) and (TCG_amp_adj[index+1] < T_TCG_veg))) and \
+                    (np.mean(TCB_mean)<3000)):
+                        disturbances[py, px, index] = year+1
                         #print('{row}, {col} - {year}'.format(row=py, col=px, year=year))
-                    else:
-                        continue
+                else:
+                    continue
+
             # Record vegetation condition 
             #(IN TESTING - NOT WORKING RIGHT YET!)            
             for index, year in enumerate(years_fmask):
                 if index < length:
                     if (TCG_amp[index] < T_TCG_open): 
                         veg_cond[py, px, index] = CONDITION_OPEN_WATER
-                    elif (TCG_amp_adj[index] < T_TCG_veg):   
+                    elif (TCG_amp[index] > T_TCG_open and TCG_amp_adj[index] < T_TCG_veg):   
                         veg_cond[py, px, index] = CONDITION_DIST_VEG
-                    else:
+                    elif TCG_amp_adj[index] > T_TCG_veg: 
                         veg_cond[py, px, index] = CONDITION_UNDIST_VEG
                 else:
                     continue          
@@ -211,7 +216,7 @@ print('Analysis of disturbance complete!')
 in_ds = gdal.Open(example_img_fn, gdal.GA_ReadOnly)
 for index, year in enumerate(years_fmask):
     if index < length:
-        disturbance_fn = './{year}_disturbance.tif'.format(year=year)
+        disturbance_fn = './{year}_disturbance.tif'.format(year=year+1)
 
         out_driver = gdal.GetDriverByName("GTiff")
         out_ds = out_driver.Create(disturbance_fn, 
@@ -225,4 +230,21 @@ for index, year in enumerate(years_fmask):
         out_ds.GetRasterBand(1).SetNoDataValue(0)
         out_ds.GetRasterBand(1).SetDescription('Beaver Disturbances')
         out_ds = None
+
+for index, year in enumerate(years_fmask):
+    if index < length:
+        condition_fn = './{year}_condition.tif'.format(year=year)
+
+        out_driver = gdal.GetDriverByName("GTiff")
+        out_ds = out_driver.Create(condition_fn, 
+                                   example_img.shape[1],  # x size
+                                   example_img.shape[0],  # y size
+                                   1,  # number of bands
+                                   gdal.GDT_UInt32)
+        out_ds.SetProjection(in_ds.GetProjection())
+        out_ds.SetGeoTransform(in_ds.GetGeoTransform())
+        out_ds.GetRasterBand(1).WriteArray(veg_cond[:, :, index])
+        out_ds.GetRasterBand(1).SetNoDataValue(0)
+        out_ds.GetRasterBand(1).SetDescription('Vegetation Condition')
+        out_ds = None        
 print('Mapped results complete!')
